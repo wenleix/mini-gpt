@@ -1,7 +1,9 @@
 
 import mlx.core as mx
 import mlx.nn as nn
+import mlx.optimizers as optim
 import math
+import numpy as np
 
 nn.TransformerEncoder
 
@@ -14,7 +16,7 @@ class MultiheadAttention(nn.Module):
     * https://ml-explore.github.io/mlx/build/html/examples/llama-inference.html#attention-layer
     """
     def __init__(self, embed_dims: int, num_heads: int):
-        super.__init__()
+        super().__init__()
 
         # embed_dims = num_heads * head_dims
         assert embed_dims % num_heads == 0, 'embed_dims must be divisible by num_heads'
@@ -31,13 +33,13 @@ class MultiheadAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dims, embed_dims, bias=False)
 
-    def forward(self, x: mx.array, mask: mx.array | None = None):
-        # queries == keys == values == x
+    def __call__(self, x: mx.array, mask: mx.array | None = None):
+        # queries = keys = values = x
         batch_size, seq_len, embed_dims = x.shape
         assert embed_dims == self.embed_dims, 'Unexpected input embedding dimensions'
 
         queries, keys, values = self.query_proj(x), self.key_proj(x), self.value_proj(x)
-        # [Batch, Head, SeqLen, HeadDims]
+        # Reshape & Transpose -> [Batch, Head, SeqLen, HeadDims]
         queries = queries.reshape(batch_size, seq_len, self.num_heads, self.head_dims).transpose(0, 2, 1, 3)
         keys = keys.reshape(batch_size, seq_len, self.num_heads, self.head_dims).transpose(0, 2, 1, 3)
         values = values.reshape(batch_size, seq_len, self.num_heads, self.head_dims).transpose(0, 2, 1, 3)
@@ -67,7 +69,7 @@ class EncoderBlock(nn.Module):
     * https://github.com/ml-explore/mlx-examples/blob/1e05aef344907d2697f82b3a5b5c00cdf21c298c/llms/llama/llama.py#L102-L111
     """
     def __init__(self, embed_dims: int, num_heads: int):
-        super.__init__()
+        super().__init__()
 
         # Attention layer
         self.attention = MultiheadAttention(embed_dims, num_heads)
@@ -83,7 +85,7 @@ class EncoderBlock(nn.Module):
         self.norm1 = nn.LayerNorm(embed_dims)
         self.norm2 = nn.LayerNorm(embed_dims)
 
-    def forward(self, x, mask: mx.array | None = None):
+    def __call__(self, x, mask: mx.array | None = None):
         # Attention part
         x = x + self.attention(self.norm1(x), mask)
 
@@ -101,7 +103,7 @@ class GPT(nn.Module):
     * https://ml-explore.github.io/mlx/build/html/examples/llama-inference.html#full-model
     """
     def __init__(self, num_layers: int, vocab_size: int, embed_dims: int, num_heads: int, block_size: int):
-        super.__init__()
+        super().__init__()
 
         self.token_embedding = nn.Embedding(vocab_size, embed_dims)
         self.block_size = block_size
@@ -113,7 +115,7 @@ class GPT(nn.Module):
         self.norm = nn.LayerNorm(embed_dims)
         self.out_proj = nn.Linear(embed_dims, vocab_size, bias=False)
 
-    def forward(self, x: mx.array):
+    def __call__(self, x: mx.array):
         batch_size, seq_len = x.shape
         assert seq_len <= self.block_size, 'Sequence length exceeds block size'
 
@@ -128,3 +130,52 @@ class GPT(nn.Module):
         x = self.norm(x)
         return self.out_proj(x)
 
+
+def loss_fn(model, X: mx.array, Y: mx.array):
+    logits = model(X)
+    losses = nn.losses.cross_entropy(logits.reshape(-1, logits.shape[-1]), Y.reshape(-1), reduction='mean')
+    return losses
+
+
+def batch_iterate(batch_size, X, Y):
+    assert X.shape == Y.shape
+    n = X.shape[0]
+    perm = mx.array(np.random.permutation(n))
+    for i in range(0, n, batch_size):
+        ids = perm[i:i + batch_size]
+        yield X[ids], Y[ids]
+
+
+BLOCK_SIZE = 64
+BATCH_SIZE = 16
+
+def main():
+    model = GPT(num_layers=4, vocab_size=256, embed_dims=128, num_heads=4, block_size=BLOCK_SIZE)
+    mx.eval(model.parameters())
+
+    optimizer = optim.Adam(learning_rate=0.001, betas=[0.9, 0.99])
+    loss_and_grad_fn = nn.value_and_grad(model, loss_fn)
+
+    with open('everglow.txt', 'r') as f:
+        text = f.read()
+    data = mx.array([ord(c) for c in text])
+    print(data.shape)
+    X = []
+    Y = []
+    for i in range(0, len(data) - BLOCK_SIZE):
+        chunk = data[i:i+BLOCK_SIZE+1]
+        X.append(chunk[:-1])
+        Y.append(chunk[1:])
+    X = mx.array(X)
+    Y = mx.array(Y)
+    print(X.shape, Y.shape)
+
+    for epoch in range(5):
+        for X_batch, Y_batch in batch_iterate(BATCH_SIZE, X, Y):
+            loss, grads = loss_and_grad_fn(model, X_batch, Y_batch)
+            optimizer.update(model, grads)
+            mx.eval(model.state)
+            print(f'loss: {loss.item()}')
+
+if __name__ == '__main__':
+    main()
