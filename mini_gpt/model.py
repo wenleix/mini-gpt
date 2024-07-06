@@ -3,7 +3,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import math
 
-nn.MultiHeadAttention
+
 class MultiheadAttention(nn.Module):
     """
     References:
@@ -45,7 +45,8 @@ class MultiheadAttention(nn.Module):
         #   [Batch, Head, SeqLen, HeadDims] X [Batch, Head, HeadDims, SeqLen] -> [Batch, Head, SeqLen, SeqLen]
         scores = queries @ keys.transpose(0, 1, 3, 2) * math.sqrt(1.0 / self.head_dims)
         if mask is not None:
-            scores = scores + mx.logical_not(mask) * 1e-9
+            # hmm, this follows MLX pattern rather than the original mask_fill pattern
+            scores += mask
         scores = mx.softmax(scores, axis=-1)
 
         # [Batch, Head, SeqLen, SeqLen] X [Batch, Head, SeqLen, HeadDims] -> [Batch, Head, SeqLen, HeadDims
@@ -57,5 +58,43 @@ class MultiheadAttention(nn.Module):
         return self.out_proj(values)
 
 
+class EncoderBlock(nn.Module):
+    """
+    References:
+    * https://github.com/karpathy/minGPT/blob/37baab71b9abea1b76ab957409a1cc2fbfba8a26/mingpt/model.py#L73-L93
+    * https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/tutorial6/Transformers_and_MHAttention.html#Transformer-Encoder
+    * https://github.com/ml-explore/mlx-examples/blob/1e05aef344907d2697f82b3a5b5c00cdf21c298c/llms/llama/llama.py#L102-L111
+    """
+    def __init__(self, embed_dims: int, num_heads: int):
+        super.__init__()
+
+        # Attention layer
+        self.attention = MultiheadAttention(embed_dims, num_heads)
+
+        # Two-layer MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dims, 4 * embed_dims),
+            nn.GELU(),
+            nn.Linear(4 * embed_dims, embed_dims)
+        )
+
+        # Layers to apply in between the main layers
+        self.norm1 = nn.LayerNorm(embed_dims)
+        self.norm2 = nn.LayerNorm(embed_dims)
+
+    def forward(self, x, mask: mx.array | None = None):
+        # Attention part
+        x = x + self.attention(self.norm1(x), mask)
+
+        # MLP part
+        x = x + self.mlp(self.norm2(x))
+
+        return x
 
 
+# class GPT(nn.Module):
+#     """
+#     References:
+#     * https://github.com/karpathy/minGPT/blob/37baab71b9abea1b76ab957409a1cc2fbfba8a26/mingpt/model.py#L95-L96
+#     * https://github.com/ml-explore/mlx-examples/blob/1e05aef344907d2697f82b3a5b5c00cdf21c298c/llms/llama/llama.py#L126-L134
+#     * https://ml-explore.github.io/mlx/build/html/examples/llama-inference.html#full-model
