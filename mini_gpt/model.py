@@ -3,6 +3,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import math
 
+nn.TransformerEncoder
 
 class MultiheadAttention(nn.Module):
     """
@@ -92,9 +93,38 @@ class EncoderBlock(nn.Module):
         return x
 
 
-# class GPT(nn.Module):
-#     """
-#     References:
-#     * https://github.com/karpathy/minGPT/blob/37baab71b9abea1b76ab957409a1cc2fbfba8a26/mingpt/model.py#L95-L96
-#     * https://github.com/ml-explore/mlx-examples/blob/1e05aef344907d2697f82b3a5b5c00cdf21c298c/llms/llama/llama.py#L126-L134
-#     * https://ml-explore.github.io/mlx/build/html/examples/llama-inference.html#full-model
+class GPT(nn.Module):
+    """
+    References:
+    * https://github.com/karpathy/minGPT/blob/37baab71b9abea1b76ab957409a1cc2fbfba8a26/mingpt/model.py#L95-L96
+    * https://github.com/ml-explore/mlx-examples/blob/1e05aef344907d2697f82b3a5b5c00cdf21c298c/llms/llama/llama.py#L126-L134
+    * https://ml-explore.github.io/mlx/build/html/examples/llama-inference.html#full-model
+    """
+    def __init__(self, num_layers: int, vocab_size: int, embed_dims: int, num_heads: int, block_size: int):
+        super.__init__()
+
+        self.token_embedding = nn.Embedding(vocab_size, embed_dims)
+        self.block_size = block_size
+        self.positional_embedding = nn.Embedding(block_size, embed_dims)
+        self.encoder_blocks = [
+            EncoderBlock(embed_dims, num_heads)
+            for _ in range(num_layers)
+        ]
+        self.norm = nn.LayerNorm(embed_dims)
+        self.out_proj = nn.Linear(embed_dims, vocab_size, bias=False)
+
+    def forward(self, x: mx.array):
+        batch_size, seq_len = x.shape
+        assert seq_len <= self.block_size, 'Sequence length exceeds block size'
+
+        positions = mx.arange(seq_len).reshape(1, seq_len)
+        # [Batch, SeqLen, EmbedDims] + [1, SeqLen, EmbedDims]
+        x = self.token_embedding(x) + self.positional_embedding(positions)
+
+        mask = nn.MultiHeadAttention.create_additive_causal_mask(seq_len, dtype=x.dtype)
+        for block in self.encoder_blocks:
+            x = block(x, mask)
+
+        x = self.norm(x)
+        return self.out_proj(x)
+
